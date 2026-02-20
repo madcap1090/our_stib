@@ -84,8 +84,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-refresh = st.slider("Refresh (seconds)", 5, 60, 15)
-st.markdown(f"<meta http-equiv='refresh' content='{refresh}'>", unsafe_allow_html=True)
+REFRESH = 15  # seconds
+st.markdown(f"<meta http-equiv='refresh' content='{REFRESH}'>", unsafe_allow_html=True)
 
 CLOSE_MIN = 1
 
