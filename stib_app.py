@@ -84,8 +84,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-REFRESH = 15  # seconds
-st.markdown(f"<meta http-equiv='refresh' content='{REFRESH}'>", unsafe_allow_html=True)
+st.button("↻", help="Refresh", on_click=lambda: (st.cache_data.clear(), st.rerun()))
 
 CLOSE_MIN = 1
 
