@@ -2,6 +2,9 @@ import json
 import urllib.parse
 import urllib.request
 from datetime import datetime
+import time
+import urllib.error
+
 
 import streamlit as st
 
@@ -22,10 +25,33 @@ def parse_dt(s: str) -> datetime:
 def fetch_results():
     where = f"pointid in ({', '.join(repr(s) for s in stop_ids)})"
     url = BASE + "?" + urllib.parse.urlencode({"limit": 200, "where": where})
-    req = urllib.request.Request(url, headers={"User-Agent": "python-urllib"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp).get("results", [])
 
+    # Some gateways dislike plain urllib; these headers usually help
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; stib-streamlit/1.0)",
+        "Accept": "application/json",
+        "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
+    }
+
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.load(resp).get("results", [])
+        except urllib.error.HTTPError as e:
+            # show status + a short snippet so you can debug (safe)
+            body = e.read(300).decode("utf-8", "ignore")
+            st.warning(f"STIB API error {e.code}: {body[:200]}")
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+        except Exception as e:
+            st.warning(f"Network error: {type(e).__name__}: {e}")
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+
+    # Don’t crash the app
+    return []
 def build_board(results):
     now = datetime.now().astimezone()
     by_stop = {sid: [] for sid in stop_ids}
