@@ -1,12 +1,13 @@
 import json
-import urllib.parse
-import urllib.request
-from datetime import datetime
 import time
-import urllib.error
-import ssl
+from datetime import datetime
 
 import streamlit as st
+import requests
+import ssl
+from urllib3.poolmanager import PoolManager
+from requests.adapters import HTTPAdapter
+
 
 display = "nl"  # "nl" or "fr"
 
@@ -19,22 +20,6 @@ stop_ids = list(stations["fr"].keys())
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
 ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
-# --- SSL context: relax security level for compatibility on some hosted runtimes ---
-_SSL_CTX = ssl.create_default_context()
-try:
-    _SSL_CTX.set_ciphers("DEFAULT:@SECLEVEL=1")
-except Exception:
-    # some builds may not support this cipher string; ignore and try default
-    pass
-
-# Optional: pin to TLS 1.2 (can help if TLS 1.3 negotiation is flaky)
-if hasattr(ssl, "TLSVersion"):
-    try:
-        _SSL_CTX.minimum_version = ssl.TLSVersion.TLSv1_2
-        _SSL_CTX.maximum_version = ssl.TLSVersion.TLSv1_2
-    except Exception:
-        pass
-
 
 def parse_dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
@@ -44,23 +29,56 @@ def build_where_pointid_in(ids: list[str]) -> str:
     return f"pointid in ({', '.join(repr(s) for s in ids)})"
 
 
-def _read(url: str, headers: dict, timeout: int = 30):
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as resp:
-        raw = resp.read()
-        return raw.decode("utf-8", "ignore") if raw else ""
+class TLSAdapter(HTTPAdapter):
+    """
+    Requests adapter with a custom SSLContext.
+    Tries to work around OpenSSL strictness / TLS quirks on hosted platforms.
+    """
+    def __init__(self, ssl_context: ssl.SSLContext, **kwargs):
+        self._ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs["ssl_context"] = self._ssl_context
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **pool_kwargs)
+
+
+def make_session() -> requests.Session:
+    ctx = ssl.create_default_context()
+
+    # Relax cipher policy a bit (helps on some OpenSSL 3 environments)
+    try:
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+    except Exception:
+        pass
+
+    # Pin to TLS 1.2 (avoid TLS 1.3 negotiation weirdness)
+    if hasattr(ssl, "TLSVersion"):
+        try:
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        except Exception:
+            pass
+
+    s = requests.Session()
+    s.mount("https://", TLSAdapter(ctx))
+    return s
+
+
+@st.cache_resource
+def get_session() -> requests.Session:
+    return make_session()
 
 
 def fetch_ods_throttled(force: bool):
-    """
-    Enforces <= 1 ODS call per 30 seconds PER SESSION.
-    If `force` is True (refresh button), bypass interval.
-    """
     now = time.time()
     last_t = st.session_state.get("ods_last_fetch_ts", 0.0)
 
     if (not force) and (now - last_t) < ODS_MIN_INTERVAL_S:
         return st.session_state.get("ods_last_records", [])
+
+    where = build_where_pointid_in(stop_ids)
+    params = {"limit": 100, "where": where}
 
     headers = {
         "User-Agent": "stib-streamlit/1.0",
@@ -70,40 +88,36 @@ def fetch_ods_throttled(force: bool):
         "Pragma": "no-cache",
     }
 
-    ods_where = build_where_pointid_in(stop_ids)
-    url = BASE_ODS + "?" + urllib.parse.urlencode({"limit": 100, "where": ods_where})
+    s = get_session()
 
     for attempt in range(3):
         try:
-            text = _read(url, headers=headers)
-            payload = json.loads(text) if text.strip() else {}
+            r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
+            if r.status_code == 429:
+                # ODS usually returns JSON with reset_time, but don't assume
+                reset = None
+                try:
+                    reset = r.json().get("reset_time")
+                except Exception:
+                    pass
+                st.warning(f"Rate limited (429). Reset: {reset or 'unknown'}")
+                return st.session_state.get("ods_last_records", [])
+
+            r.raise_for_status()
+
+            payload = r.json() if r.text.strip() else {}
             records = payload.get("results", [])
 
             st.session_state["ods_last_fetch_ts"] = now
             st.session_state["ods_last_records"] = records
             return records
 
-        except urllib.error.HTTPError as e:
-            body = e.read(2000).decode("utf-8", "ignore")
-            if e.code == 429:
-                reset = None
-                try:
-                    reset = json.loads(body).get("reset_time")
-                except Exception:
-                    pass
-                st.warning(f"Rate limited (429). Reset: {reset or 'unknown'}")
-                return st.session_state.get("ods_last_records", [])
-            st.warning(f"ODS error {e.code}: {body[:200]}")
-            time.sleep(1.5 * (attempt + 1))
-
-        except ssl.SSLError as e:
+        except requests.exceptions.SSLError as e:
             st.warning(f"TLS error: {e}")
             time.sleep(1.5 * (attempt + 1))
-
-        except urllib.error.URLError as e:
+        except requests.exceptions.RequestException as e:
             st.warning(f"Network error: {e}")
             time.sleep(1.5 * (attempt + 1))
-
         except json.JSONDecodeError:
             st.warning("ODS did not return valid JSON.")
             time.sleep(1.5 * (attempt + 1))
@@ -148,15 +162,11 @@ st.markdown(
     <style>
       .block-container { padding-top: 1rem; padding-bottom: 1rem; }
       code { font-size: 22px !important; line-height: 1.25 !important; }
-
-      /* Bigger refresh button */
       div.stButton > button {
         padding: 0.7rem 1.1rem !important;
         font-size: 1.25rem !important;
         border-radius: 0.75rem !important;
       }
-
-      /* Small pad / spacing around top controls */
       .top-pad { margin: 0.25rem 0 0.75rem 0; }
     </style>
     """,
