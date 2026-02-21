@@ -84,8 +84,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.caption(f"rerun at {datetime.now().isoformat(timespec='seconds')}")
 st.button("↻", help="Refresh", on_click=lambda: (st.cache_data.clear(), st.rerun()))
+st.caption(f"rerun at {datetime.now().isoformat(timespec='seconds')}")
 
 CLOSE_MIN = 1
 
