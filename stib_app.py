@@ -21,7 +21,7 @@ BASE = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waitin
 def parse_dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=25)
 def fetch_results():
     where = f"pointid in ({', '.join(repr(s) for s in stop_ids)})"
     url = BASE + "?" + urllib.parse.urlencode({"limit": 100, "where": where})
