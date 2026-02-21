@@ -1,12 +1,13 @@
 import json
-import urllib.parse
-import urllib.request
-from datetime import datetime
 import time
-import urllib.error
-
+from datetime import datetime
 
 import streamlit as st
+import requests
+import ssl
+from urllib3.poolmanager import PoolManager
+from requests.adapters import HTTPAdapter
+
 
 display = "nl"  # "nl" or "fr"
 
@@ -16,39 +17,119 @@ stations = {
 }
 stop_ids = list(stations["fr"].keys())
 
-BASE = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
+BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
+ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
+
 
 def parse_dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
-@st.cache_data(ttl=10)
-def fetch_results():
-    where = f"pointid in ({', '.join(repr(s) for s in stop_ids)})"
-    url = BASE + "?" + urllib.parse.urlencode({"limit": 100, "where": where})
+
+def build_where_pointid_in(ids: list[str]) -> str:
+    return f"pointid in ({', '.join(repr(s) for s in ids)})"
+
+
+class TLSAdapter(HTTPAdapter):
+    """
+    Requests adapter with a custom SSLContext.
+    Tries to work around OpenSSL strictness / TLS quirks on hosted platforms.
+    """
+    def __init__(self, ssl_context: ssl.SSLContext, **kwargs):
+        self._ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs["ssl_context"] = self._ssl_context
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **pool_kwargs)
+
+
+def make_session() -> requests.Session:
+    ctx = ssl.create_default_context()
+
+    # Relax cipher policy a bit (helps on some OpenSSL 3 environments)
+    try:
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+    except Exception:
+        pass
+
+    # Pin to TLS 1.2 (avoid TLS 1.3 negotiation weirdness)
+    if hasattr(ssl, "TLSVersion"):
+        try:
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        except Exception:
+            pass
+
+    s = requests.Session()
+    s.mount("https://", TLSAdapter(ctx))
+    return s
+
+
+@st.cache_resource
+def get_session() -> requests.Session:
+    return make_session()
+
+
+def fetch_ods_throttled(force: bool):
+    now = time.time()
+    last_t = st.session_state.get("ods_last_fetch_ts", 0.0)
+
+    if (not force) and (now - last_t) < ODS_MIN_INTERVAL_S:
+        return st.session_state.get("ods_last_records", [])
+
+    where = build_where_pointid_in(stop_ids)
+    params = {"limit": 100, "where": where}
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; stib-streamlit/1.0)",
+        "User-Agent": "stib-streamlit/1.0",
         "Accept": "application/json",
         "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
     }
+
+    s = get_session()
 
     for attempt in range(3):
         try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return json.load(resp).get("results", [])
-        except urllib.error.HTTPError as e:
-            body = e.read(300).decode("utf-8", "ignore")
-            st.warning(f"STIB API error {e.code}: {body[:200]}")
+            r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
+            if r.status_code == 429:
+                # ODS usually returns JSON with reset_time, but don't assume
+                reset = None
+                try:
+                    reset = r.json().get("reset_time")
+                except Exception:
+                    pass
+                st.warning(f"Rate limited (429). Reset: {reset or 'unknown'}")
+                return st.session_state.get("ods_last_records", [])
+
+            r.raise_for_status()
+
+            payload = r.json() if r.text.strip() else {}
+            records = payload.get("results", [])
+
+            st.session_state["ods_last_fetch_ts"] = now
+            st.session_state["ods_last_records"] = records
+            return records
+
+        except requests.exceptions.SSLError as e:
+            st.warning(f"TLS error: {e}")
+            time.sleep(1.5 * (attempt + 1))
+        except requests.exceptions.RequestException as e:
+            st.warning(f"Network error: {e}")
+            time.sleep(1.5 * (attempt + 1))
+        except json.JSONDecodeError:
+            st.warning("ODS did not return valid JSON.")
             time.sleep(1.5 * (attempt + 1))
 
-    return []
+    return st.session_state.get("ods_last_records", [])
 
-def build_board(results):
+
+def build_board(records):
     now = datetime.now().astimezone()
     by_stop = {sid: [] for sid in stop_ids}
 
-    for rec in results:
+    for rec in records:
         sid = rec.get("pointid")
         if sid not in by_stop:
             continue
@@ -62,8 +143,7 @@ def build_board(results):
                 continue
 
             mins = int((parse_dt(eta_s) - now).total_seconds() // 60)
-            mins = max(0, mins)
-            by_stop[sid].append((mins, line, dest))
+            by_stop[sid].append((max(0, mins), line, dest))
 
     out = []
     for sid in stop_ids:
@@ -72,6 +152,9 @@ def build_board(results):
         out.append((title, deps))
     return out
 
+
+# ---------------- UI ----------------
+
 st.set_page_config(page_title="STIB LCD", layout="centered")
 
 st.markdown(
@@ -79,18 +162,34 @@ st.markdown(
     <style>
       .block-container { padding-top: 1rem; padding-bottom: 1rem; }
       code { font-size: 22px !important; line-height: 1.25 !important; }
+      div.stButton > button {
+        padding: 0.7rem 1.1rem !important;
+        font-size: 1.25rem !important;
+        border-radius: 0.75rem !important;
+      }
+      .top-pad { margin: 0.25rem 0 0.75rem 0; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-REFRESH = 15  # seconds
-st.markdown(f"<meta http-equiv='refresh' content='{REFRESH}'>", unsafe_allow_html=True)
-st.button("↻", help="Refresh", on_click=lambda: (st.cache_data.clear(), st.rerun()))
+st.markdown('<div class="top-pad"></div>', unsafe_allow_html=True)
+
+col1, col2 = st.columns([1, 8], vertical_alignment="center")
+
+force_refresh = False
+with col1:
+    if st.button("↻", help="Refresh"):
+        force_refresh = True
+
+with col2:
+    st.caption(f"Last rerun: {datetime.now().isoformat(timespec='seconds')}")
+
+records = fetch_ods_throttled(force=force_refresh)
 
 CLOSE_MIN = 1
+board = build_board(records)
 
-board = build_board(fetch_results())
 for title, deps in board:
     st.markdown(f"### {title}")
     if not deps:
@@ -101,3 +200,4 @@ for title, deps in board:
     for mins, line, dest in deps:
         mins_disp = "↓↓" if mins <= CLOSE_MIN else f"{mins:>2}"
         lines.append(f"{line:>2} {dest[:18]:<18} {mins_disp:>2}")
+    st.code("\n".join(lines), language="text")
