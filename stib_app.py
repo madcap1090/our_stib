@@ -1,3 +1,4 @@
+import json
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -163,13 +164,6 @@ for title, deps in board:
     st.markdown(f"### {title}")
     if not deps:
         st.caption("(geen realtime data)")
-        continue
-
-    lines = []
-    for mins, line, dest in deps:
-        mins_disp = "↓↓" if mins <= CLOSE_MIN else f"{mins:>2}"
-        lines.append(f"{line:>2} {dest[:18]:<18} {mins_disp:>2}")
-    st.code("\n".join(lines), language="text")
         continue
 
     lines = []
