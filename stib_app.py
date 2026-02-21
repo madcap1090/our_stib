@@ -4,6 +4,7 @@ import urllib.request
 from datetime import datetime
 import time
 import urllib.error
+import ssl
 
 import streamlit as st
 
@@ -27,19 +28,20 @@ def build_where_pointid_in(ids: list[str]) -> str:
     return f"pointid in ({', '.join(repr(s) for s in ids)})"
 
 
+# Force TLS >= 1.2 (helps with some CDNs / edge cases)
+_SSL_CTX = ssl.create_default_context()
+if hasattr(ssl, "TLSVersion"):
+    _SSL_CTX.minimum_version = ssl.TLSVersion.TLSv1_2
+
+
 def _read(url: str, headers: dict, timeout: int = 30):
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as resp:
         raw = resp.read()
-        text = raw.decode("utf-8", "ignore") if raw else ""
-        return text
+        return raw.decode("utf-8", "ignore") if raw else ""
 
 
 def fetch_ods_throttled(force: bool):
-    """
-    Enforces <= 1 ODS call per 30 seconds PER SESSION.
-    If `force` is True (refresh button), bypass interval.
-    """
     now = time.time()
     last_t = st.session_state.get("ods_last_fetch_ts", 0.0)
 
@@ -78,6 +80,10 @@ def fetch_ods_throttled(force: bool):
                 st.warning(f"Rate limited (429). Reset: {reset or 'unknown'}")
                 return st.session_state.get("ods_last_records", [])
             st.warning(f"ODS error {e.code}: {body[:200]}")
+            time.sleep(1.5 * (attempt + 1))
+
+        except ssl.SSLError as e:
+            st.warning(f"TLS error: {e}")
             time.sleep(1.5 * (attempt + 1))
 
         except urllib.error.URLError as e:
@@ -128,15 +134,11 @@ st.markdown(
     <style>
       .block-container { padding-top: 1rem; padding-bottom: 1rem; }
       code { font-size: 22px !important; line-height: 1.25 !important; }
-
-      /* Bigger refresh button */
       div.stButton > button {
         padding: 0.7rem 1.1rem !important;
         font-size: 1.25rem !important;
         border-radius: 0.75rem !important;
       }
-
-      /* Small pad / spacing around top controls */
       .top-pad { margin: 0.25rem 0 0.75rem 0; }
     </style>
     """,
