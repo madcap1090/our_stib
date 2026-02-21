@@ -19,6 +19,22 @@ stop_ids = list(stations["fr"].keys())
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
 ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
+# --- SSL context: relax security level for compatibility on some hosted runtimes ---
+_SSL_CTX = ssl.create_default_context()
+try:
+    _SSL_CTX.set_ciphers("DEFAULT:@SECLEVEL=1")
+except Exception:
+    # some builds may not support this cipher string; ignore and try default
+    pass
+
+# Optional: pin to TLS 1.2 (can help if TLS 1.3 negotiation is flaky)
+if hasattr(ssl, "TLSVersion"):
+    try:
+        _SSL_CTX.minimum_version = ssl.TLSVersion.TLSv1_2
+        _SSL_CTX.maximum_version = ssl.TLSVersion.TLSv1_2
+    except Exception:
+        pass
+
 
 def parse_dt(s: str) -> datetime:
     return datetime.fromisoformat(s)
@@ -26,12 +42,6 @@ def parse_dt(s: str) -> datetime:
 
 def build_where_pointid_in(ids: list[str]) -> str:
     return f"pointid in ({', '.join(repr(s) for s in ids)})"
-
-
-# Force TLS >= 1.2 (helps with some CDNs / edge cases)
-_SSL_CTX = ssl.create_default_context()
-if hasattr(ssl, "TLSVersion"):
-    _SSL_CTX.minimum_version = ssl.TLSVersion.TLSv1_2
 
 
 def _read(url: str, headers: dict, timeout: int = 30):
@@ -42,6 +52,10 @@ def _read(url: str, headers: dict, timeout: int = 30):
 
 
 def fetch_ods_throttled(force: bool):
+    """
+    Enforces <= 1 ODS call per 30 seconds PER SESSION.
+    If `force` is True (refresh button), bypass interval.
+    """
     now = time.time()
     last_t = st.session_state.get("ods_last_fetch_ts", 0.0)
 
@@ -134,11 +148,15 @@ st.markdown(
     <style>
       .block-container { padding-top: 1rem; padding-bottom: 1rem; }
       code { font-size: 22px !important; line-height: 1.25 !important; }
+
+      /* Bigger refresh button */
       div.stButton > button {
         padding: 0.7rem 1.1rem !important;
         font-size: 1.25rem !important;
         border-radius: 0.75rem !important;
       }
+
+      /* Small pad / spacing around top controls */
       .top-pad { margin: 0.25rem 0 0.75rem 0; }
     </style>
     """,
