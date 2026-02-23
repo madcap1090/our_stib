@@ -169,7 +169,7 @@ st.set_page_config(page_title="STIB LCD", layout="centered")
 st.markdown(
     """
     <style>
-      .block-container { padding-top: 2rem; padding-bottom: 1rem; }
+      .block-container { padding-top: 3rem; padding-bottom: 1rem; }
       code { font-size: 22px !important; line-height: 1.25 !important; }
       div.stButton > button {
         padding: 0.7rem 1.1rem !important;
