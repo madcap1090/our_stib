@@ -7,7 +7,9 @@ import requests
 import ssl
 from urllib3.poolmanager import PoolManager
 from requests.adapters import HTTPAdapter
+from zoneinfo import ZoneInfo
 
+BRUSSELS = ZoneInfo("Europe/Brussels")
 
 display = "nl"  # "nl" or "fr"
 
@@ -22,7 +24,13 @@ ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
 
 def parse_dt(s: str) -> datetime:
-    return datetime.fromisoformat(s)
+    # ODS often returns ...Z; fromisoformat doesn't like 'Z'
+    s = s.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    # If it's naive for some reason, assume UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt
 
 
 def build_where_pointid_in(ids: list[str]) -> str:
@@ -126,7 +134,7 @@ def fetch_ods_throttled(force: bool):
 
 
 def build_board(records):
-    now = datetime.now().astimezone()
+    now = datetime.now(BRUSSELS)
     by_stop = {sid: [] for sid in stop_ids}
 
     for rec in records:
@@ -142,7 +150,8 @@ def build_board(records):
             if not (line and dest and eta_s):
                 continue
 
-            mins = int((parse_dt(eta_s) - now).total_seconds() // 60)
+            eta = parse_dt(eta_s).astimezone(BRUSSELS)
+            mins = int((eta - now).total_seconds() // 60)
             by_stop[sid].append((max(0, mins), line, dest))
 
     out = []
@@ -160,7 +169,7 @@ st.set_page_config(page_title="STIB LCD", layout="centered")
 st.markdown(
     """
     <style>
-      .block-container { padding-top: 1rem; padding-bottom: 1rem; }
+      .block-container { padding-top: 2rem; padding-bottom: 1rem; }
       code { font-size: 22px !important; line-height: 1.25 !important; }
       div.stButton > button {
         padding: 0.7rem 1.1rem !important;
@@ -173,7 +182,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="top-pad"></div>', unsafe_allow_html=True)
+
 
 col1, col2 = st.columns([1, 8], vertical_alignment="center")
 
@@ -183,7 +192,7 @@ with col1:
         force_refresh = True
 
 with col2:
-    st.caption(f"Last rerun: {datetime.now().isoformat(timespec='seconds')}")
+    st.caption(f"Last rerun: {datetime.now(BRUSSELS).isoformat(timespec='seconds')}")
 
 records = fetch_ods_throttled(force=force_refresh)
 
