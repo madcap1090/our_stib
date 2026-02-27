@@ -20,12 +20,14 @@ stations = {
 stop_ids = list(stations["fr"].keys())
 
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
-CACHE_TTL_S = 30  # shared cache across users (prevents per-user spam / shared-IP 429s)
+ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
 
 def parse_dt(s: str) -> datetime:
+    # ODS often returns ...Z; fromisoformat doesn't like 'Z'
     s = s.replace("Z", "+00:00")
     dt = datetime.fromisoformat(s)
+    # If it's naive for some reason, assume UTC
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ZoneInfo("UTC"))
     return dt
@@ -36,17 +38,17 @@ def build_where_pointid_in(ids: list[str]) -> str:
 
 
 class TLSAdapter(HTTPAdapter):
-    """Requests adapter with a custom SSLContext (handy on some hosted OpenSSL setups)."""
-
+    """
+    Requests adapter with a custom SSLContext.
+    Tries to work around OpenSSL strictness / TLS quirks on hosted platforms.
+    """
     def __init__(self, ssl_context: ssl.SSLContext, **kwargs):
         self._ssl_context = ssl_context
         super().__init__(**kwargs)
 
     def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
         pool_kwargs["ssl_context"] = self._ssl_context
-        self.poolmanager = PoolManager(
-            num_pools=connections, maxsize=maxsize, block=block, **pool_kwargs
-        )
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **pool_kwargs)
 
 
 def make_session() -> requests.Session:
@@ -76,47 +78,59 @@ def get_session() -> requests.Session:
     return make_session()
 
 
-@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def fetch_ods_cached(where: str) -> list[dict]:
-    """
-    Shared cache across all users/sessions (keyed by args).
-    This is the big fix vs st.session_state throttling.
-    """
+def fetch_ods_throttled(force: bool):
+    now = time.time()
+    last_t = st.session_state.get("ods_last_fetch_ts", 0.0)
+
+    if (not force) and (now - last_t) < ODS_MIN_INTERVAL_S:
+        return st.session_state.get("ods_last_records", [])
+
+    where = build_where_pointid_in(stop_ids)
     params = {"limit": 100, "where": where}
 
     headers = {
         "User-Agent": "stib-streamlit/1.0",
         "Accept": "application/json",
         "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
-        # NOTE: don't send no-cache headers; they can reduce upstream caching benefits
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
     }
-
-    api_key = st.secrets.get("STIB_API_KEY", None)
-    if api_key:
-        # ODS Explore API v2 authentication
-        headers["Authorization"] = f"Apikey {api_key}"
 
     s = get_session()
 
-    for attempt in range(4):
+    for attempt in range(3):
         try:
             r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
-
             if r.status_code == 429:
-                # Respect Retry-After if present; otherwise exponential backoff
-                ra = r.headers.get("Retry-After")
-                sleep_s = int(ra) if (ra and ra.isdigit()) else (2**attempt)
-                time.sleep(sleep_s)
-                continue
+                # ODS usually returns JSON with reset_time, but don't assume
+                reset = None
+                try:
+                    reset = r.json().get("reset_time")
+                except Exception:
+                    pass
+                st.warning(f"Rate limited (429). Reset: {reset or 'unknown'}")
+                return st.session_state.get("ods_last_records", [])
 
             r.raise_for_status()
-            payload = r.json() if r.text.strip() else {}
-            return payload.get("results", [])
 
-        except (requests.exceptions.SSLError, requests.exceptions.RequestException, json.JSONDecodeError):
+            payload = r.json() if r.text.strip() else {}
+            records = payload.get("results", [])
+
+            st.session_state["ods_last_fetch_ts"] = now
+            st.session_state["ods_last_records"] = records
+            return records
+
+        except requests.exceptions.SSLError as e:
+            st.warning(f"TLS error: {e}")
+            time.sleep(1.5 * (attempt + 1))
+        except requests.exceptions.RequestException as e:
+            st.warning(f"Network error: {e}")
+            time.sleep(1.5 * (attempt + 1))
+        except json.JSONDecodeError:
+            st.warning("ODS did not return valid JSON.")
             time.sleep(1.5 * (attempt + 1))
 
-    return []
+    return st.session_state.get("ods_last_records", [])
 
 
 def build_board(records):
@@ -168,6 +182,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+
 col1, col2 = st.columns([1, 8], vertical_alignment="center")
 
 force_refresh = False
@@ -178,20 +194,10 @@ with col1:
 with col2:
     st.caption(f"Last rerun: {datetime.now(BRUSSELS).isoformat(timespec='seconds')}")
 
-where = build_where_pointid_in(stop_ids)
-
-if force_refresh:
-    # blow the shared cache and immediately refetch
-    fetch_ods_cached.clear()
-
-records = fetch_ods_cached(where)
+records = fetch_ods_throttled(force=force_refresh)
 
 CLOSE_MIN = 1
 board = build_board(records)
-
-# Helpful warning if key is missing (optional)
-if not st.secrets.get("STIB_API_KEY", ""):
-    st.warning("No STIB_API_KEY found in .streamlit/secrets.toml (requests will be anonymous and rate-limited faster).")
 
 for title, deps in board:
     st.markdown(f"### {title}")
