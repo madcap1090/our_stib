@@ -105,7 +105,7 @@ def fetch_ods_throttled(force: bool):
         "bmc-partner-key": st.secrets["BMC_PARTNER_KEY"].strip(),
     }
 
-    where = build_where_pointid_in(stop_ids)
+    where = build_where_pointid(stop_ids)
     url = BASE_AZ + "?" + urlencode(
     {"limit": 100, "where": where},
     quote_via=quote,  # encodes spaces as %20, not +
