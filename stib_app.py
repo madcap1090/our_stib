@@ -1,10 +1,13 @@
 import json
+import time
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-import certifi
-import requests
 import streamlit as st
+import requests
+import ssl
+from urllib3.poolmanager import PoolManager
+from requests.adapters import HTTPAdapter
+from zoneinfo import ZoneInfo
 
 BRUSSELS = ZoneInfo("Europe/Brussels")
 
@@ -16,14 +19,15 @@ stations = {
 }
 stop_ids = list(stations["fr"].keys())
 
-# Cloudflare Worker URL (NOT the STIB/OpenDataSoft URL)
-BASE_PROXY = "https://stib-proxy.stib-proxy.madcap1090.workers.dev"
-CACHE_TTL_S = 60
+BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
+ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
 
 def parse_dt(s: str) -> datetime:
+    # ODS often returns ...Z; fromisoformat doesn't like 'Z'
     s = s.replace("Z", "+00:00")
     dt = datetime.fromisoformat(s)
+    # If it's naive for some reason, assume UTC
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ZoneInfo("UTC"))
     return dt
@@ -33,22 +37,100 @@ def build_where_pointid_in(ids: list[str]) -> str:
     return f"pointid in ({', '.join(repr(s) for s in ids)})"
 
 
-@st.cache_resource
-def get_session() -> requests.Session:
+class TLSAdapter(HTTPAdapter):
+    """
+    Requests adapter with a custom SSLContext.
+    Tries to work around OpenSSL strictness / TLS quirks on hosted platforms.
+    """
+    def __init__(self, ssl_context: ssl.SSLContext, **kwargs):
+        self._ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs["ssl_context"] = self._ssl_context
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, **pool_kwargs)
+
+
+def make_session() -> requests.Session:
+    ctx = ssl.create_default_context()
+
+    # Relax cipher policy a bit (helps on some OpenSSL 3 environments)
+    try:
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+    except Exception:
+        pass
+
+    # Pin to TLS 1.2 (avoid TLS 1.3 negotiation weirdness)
+    if hasattr(ssl, "TLSVersion"):
+        try:
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        except Exception:
+            pass
+
     s = requests.Session()
-    s.verify = certifi.where()  # <-- force known-good CA bundle
-    s.headers.update({"User-Agent": "stib-streamlit/1.0"})
+    s.mount("https://", TLSAdapter(ctx))
     return s
 
-@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def fetch_via_proxy(where: str) -> list[dict]:
-    # The worker expects where/limit and returns the upstream JSON unchanged
+
+@st.cache_resource
+def get_session() -> requests.Session:
+    return make_session()
+
+
+def fetch_ods_throttled(force: bool):
+    now = time.time()
+    last_t = st.session_state.get("ods_last_fetch_ts", 0.0)
+
+    if (not force) and (now - last_t) < ODS_MIN_INTERVAL_S:
+        return st.session_state.get("ods_last_records", [])
+
+    where = build_where_pointid_in(stop_ids)
+    params = {"limit": 100, "where": where}
+
+    headers = {
+        "User-Agent": "stib-streamlit/1.0",
+        "Accept": "application/json",
+        "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
 
     s = get_session()
-    r = s.get(BASE_PROXY, params={"limit": 100, "where": where}, timeout=30)
-    r.raise_for_status()
-    payload = r.json()
-    return payload.get("results", [])
+
+    for attempt in range(3):
+        try:
+            r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
+            if r.status_code == 429:
+                # ODS usually returns JSON with reset_time, but don't assume
+                reset = None
+                try:
+                    reset = r.json().get("reset_time")
+                except Exception:
+                    pass
+                st.warning(f"Rate limited (429). Reset: {reset or 'unknown'}")
+                return st.session_state.get("ods_last_records", [])
+
+            r.raise_for_status()
+
+            payload = r.json() if r.text.strip() else {}
+            records = payload.get("results", [])
+
+            st.session_state["ods_last_fetch_ts"] = now
+            st.session_state["ods_last_records"] = records
+            return records
+
+        except requests.exceptions.SSLError as e:
+            st.warning(f"TLS error: {e}")
+            time.sleep(1.5 * (attempt + 1))
+        except requests.exceptions.RequestException as e:
+            st.warning(f"Network error: {e}")
+            time.sleep(1.5 * (attempt + 1))
+        except json.JSONDecodeError:
+            st.warning("ODS did not return valid JSON.")
+            time.sleep(1.5 * (attempt + 1))
+
+    return st.session_state.get("ods_last_records", [])
 
 
 def build_board(records):
@@ -81,53 +163,43 @@ def build_board(records):
 
 
 # ---------------- UI ----------------
+
 st.set_page_config(page_title="STIB LCD", layout="centered")
 
-import importlib.metadata as md
-import ssl
-import sys
+st.markdown(
+    """
+    <style>
+      .block-container { padding-top: 3rem; padding-bottom: 1rem; }
+      code { font-size: 22px !important; line-height: 1.25 !important; }
+      div.stButton > button {
+        padding: 0.7rem 1.1rem !important;
+        font-size: 1.25rem !important;
+        border-radius: 0.75rem !important;
+      }
+      .top-pad { margin: 0.25rem 0 0.75rem 0; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-import certifi
-import requests
-import streamlit as st
 
-TEST_URLS = [
-    "https://example.com",
-    "https://www.google.com",
-    "https://api.github.com",
-    "https://cloudflare.com",
-]
 
-st.sidebar.write("Connectivity tests:")
-for u in TEST_URLS:
-    try:
-        r = requests.get(u, timeout=10)
-        st.sidebar.write(u, "->", r.status_code)
-    except Exception as e:
-        st.sidebar.write(u, "->", repr(e))
-st.sidebar.write("Python:", sys.version)
-st.sidebar.write("OpenSSL:", ssl.OPENSSL_VERSION)
+col1, col2 = st.columns([1, 8], vertical_alignment="center")
 
-st.sidebar.write("certifi version:", md.version("certifi"))
-st.sidebar.write("certifi.where:", certifi.where())
-force_refresh = st.button("↻", help="Refresh")
+force_refresh = False
+with col1:
+    if st.button("↻", help="Refresh"):
+        force_refresh = True
 
-where = build_where_pointid_in(stop_ids)
+with col2:
+    st.caption(f"Last rerun: {datetime.now(BRUSSELS).isoformat(timespec='seconds')}")
 
-if force_refresh:
-    fetch_via_proxy.clear()
-
-try:
-    records = fetch_via_proxy(where)
-    st.session_state["last_good_records"] = records
-except Exception as e:
-    st.warning(str(e))
-    records = st.session_state.get("last_good_records", [])
-
-st.sidebar.write("records:", len(records))
+records = fetch_ods_throttled(force=force_refresh)
 
 CLOSE_MIN = 1
-for title, deps in build_board(records):
+board = build_board(records)
+
+for title, deps in board:
     st.markdown(f"### {title}")
     if not deps:
         st.caption("(geen realtime data)")
