@@ -23,7 +23,7 @@ stations = {
     "nl": {"6803": "LENOIR", "1674": "BRUSSELAARS", "2506": "SPIEGEL", "1014": "SPIEGEL"},
 }
 stop_ids = list(stations["fr"].keys())
-stop_ids = ['1014']
+#stop_ids = ['1014']
 
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
 BASE_AZ = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes/"
@@ -106,6 +106,7 @@ def fetch_ods_throttled(force: bool):
     }
 
     where = build_where_pointid(stop_ids)
+    where = "pointid='6803' OR pointid='1674' OR pointid='2506' OR pointid='1014'"
     url = BASE_AZ + "?" + urlencode(
     {"limit": 100, "where": where},
     quote_via=quote,  # encodes spaces as %20, not +
