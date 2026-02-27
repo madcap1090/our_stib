@@ -3,6 +3,8 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import certifi
+import httpx
 import requests
 import streamlit as st
 
@@ -44,34 +46,31 @@ def get_session() -> requests.Session:
 def fetch_ods_cached(where: str) -> list[dict]:
     params = {"limit": 100, "where": where}
     headers = {
+        "User-Agent": "stib-streamlit/1.0",
         "Accept": "application/json",
         "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
     }
 
     api_key = st.secrets.get("STIB_API_KEY")
     if api_key:
-        headers["Authorization"] = f"Apikey {api_key}"  # keep key OUT of URL
+        headers["Authorization"] = f"Apikey {api_key}"
 
-    s = get_session()
-
-    last_exc = None
-    for attempt in range(3):
-        try:
-            r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
-            break
-        except requests.exceptions.SSLError as e:
-            last_exc = e
-            time.sleep(1.5 * (attempt + 1))
-    else:
-        raise last_exc
+    # httpx: different TLS/HTTP implementation than requests+urllib3
+    with httpx.Client(
+        timeout=30.0,
+        verify=certifi.where(),
+        http2=False,   # important: avoid some CDN HTTP/2+TLS quirks
+        follow_redirects=True,
+    ) as client:
+        r = client.get(BASE_ODS, params=params, headers=headers)
 
     if r.status_code == 429:
-        data = safe_json(r)
-        raise RuntimeError(f"429 reset_time={data.get('reset_time')} body={data}")
+        raise RuntimeError(f"429 {r.text}")
 
     r.raise_for_status()
     payload = r.json() if r.text.strip() else {}
     return payload.get("results", [])
+
 
 def build_board(records):
     now = datetime.now(BRUSSELS)
