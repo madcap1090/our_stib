@@ -86,6 +86,11 @@ def build_board(records):
 # ---------------- UI ----------------
 st.set_page_config(page_title="STIB LCD", layout="centered")
 
+import ssl
+import sys
+st.sidebar.write("Python:", sys.version)
+st.sidebar.write("OpenSSL:", ssl.OPENSSL_VERSION)
+
 force_refresh = st.button("↻", help="Refresh")
 
 where = build_where_pointid_in(stop_ids)
