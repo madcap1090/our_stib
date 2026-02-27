@@ -81,51 +81,37 @@ def get_session() -> requests.Session:
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def fetch_ods_cached(where: str) -> list[dict]:
-    """
-    Shared cache across all users/sessions (keyed by args).
-    This is the big fix vs st.session_state throttling.
-    """
     params = {"limit": 100, "where": where}
 
     headers = {
         "User-Agent": "stib-streamlit/1.0",
         "Accept": "application/json",
         "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
-        # NOTE: don't send no-cache headers; they can reduce upstream caching benefits
     }
 
-    api_key = st.secrets.get("STIB_API_KEY", None)
+    api_key = st.secrets.get("STIB_API_KEY")
     if api_key:
-        # ODS Explore API v2 authentication
         headers["Authorization"] = f"Apikey {api_key}"
         params["apikey"] = api_key
 
     s = get_session()
+    r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
 
-    for attempt in range(4):
-        try:
-            r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
+    if r.status_code == 429:
+        data = safe_json(r)
+        raise RuntimeError(
+            "Rate limited (429). "
+            f"reset_time={data.get('reset_time')} "
+            f"Retry-After={r.headers.get('Retry-After')} "
+            f"Remaining={r.headers.get('X-RateLimit-Remaining')} "
+            f"Limit={r.headers.get('X-RateLimit-Limit')}"
+        )
 
-            if r.status_code == 429:
-                st.warning(
-                    "Rate limited (429).\n"
-                    f"reset_time: {safe_json(r).get('reset_time')}\n"
-                    f"Retry-After: {r.headers.get('Retry-After')}\n"
-                    f"X-RateLimit-Remaining: {r.headers.get('X-RateLimit-Remaining')}\n"
-                    f"X-RateLimit-Limit: {r.headers.get('X-RateLimit-Limit')}"
-                )
-                return []
-
-            r.raise_for_status()
-            payload = r.json() if r.text.strip() else {}
-            return payload.get("results", [])
-
-        except (requests.exceptions.SSLError, requests.exceptions.RequestException, json.JSONDecodeError):
-            time.sleep(1.5 * (attempt + 1))
-
-    return []
-
+    r.raise_for_status()
+    payload = r.json() if r.text.strip() else {}
+    return payload.get("results", [])
 
 def build_board(records):
     now = datetime.now(BRUSSELS)
@@ -195,10 +181,18 @@ if force_refresh:
     # blow the shared cache and immediately refetch
     fetch_ods_cached.clear()
 
-records = fetch_ods_cached(where)
+try:
+    records = fetch_ods_cached(where)
+    st.session_state["last_good_records"] = records
+except Exception as e:
+    st.warning(str(e))
+    records = st.session_state.get("last_good_records", [])
 
 CLOSE_MIN = 1
 board = build_board(records)
+
+st.sidebar.write("records:", len(records))
+st.sidebar.write("cache ttl (s):", CACHE_TTL_S)
 
 # Helpful warning if key is missing (optional)
 if not st.secrets.get("STIB_API_KEY", ""):
