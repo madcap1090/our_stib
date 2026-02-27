@@ -1,7 +1,9 @@
 import json
 import ssl
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -25,6 +27,11 @@ BASE_AZ = "https://api-management-opendata-production.azure-api.net/api/datasets
 
 ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
+def _read(url: str, headers: dict, timeout: int = 30) -> str:
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+        return raw.decode("utf-8", "ignore") if raw else ""
 
 def parse_dt(s: str) -> datetime:
     # ODS often returns ...Z; fromisoformat doesn't like 'Z'
