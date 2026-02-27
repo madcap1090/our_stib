@@ -30,6 +30,7 @@ BASE_AZ = "https://api-management-opendata-production.azure-api.net/api/datasets
 
 ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
+
 def _read(url: str, headers: dict, timeout: int = 30) -> str:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -46,9 +47,8 @@ def parse_dt(s: str) -> datetime:
     return dt
 
 
-def build_where_pointid_in(ids: list[str]) -> str:
-    # no spaces anywhere
-    return "pointid in (" + ",".join(str(int(x)) for x in ids) + ")"
+def build_where_pointid(ids: list[str]) -> str:
+    return " OR ".join(f"pointid={int(x)}" for x in ids)
 
 class TLSAdapter(HTTPAdapter):
     """
@@ -110,10 +110,6 @@ def fetch_ods_throttled(force: bool):
     {"limit": 100, "where": where},
     quote_via=quote,  # encodes spaces as %20, not +
     )
-    url = BASE_AZ + "?" + urlencode({"limit": 500}, quote_via=quote)
-    # debug: print the final URL being requested (without the key, which is in headers)
-    st.sidebar.write("url:", url)
-
 
     for attempt in range(3):
         try:
