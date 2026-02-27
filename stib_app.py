@@ -1,24 +1,24 @@
 import json
-import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import certifi
-import httpx
 import requests
 import streamlit as st
 
 BRUSSELS = ZoneInfo("Europe/Brussels")
 
-display = "nl"
+display = "nl"  # "nl" or "fr"
+
 stations = {
     "fr": {"6803": "LENOIR", "1674": "BRUXELLOIS", "2506": "MIRRIOR", "1014": "MIRRIOR"},
     "nl": {"6803": "LENOIR", "1674": "BRUSSELAARS", "2506": "SPIEGEL", "1014": "SPIEGEL"},
 }
 stop_ids = list(stations["fr"].keys())
 
-BASE_ODS = "https://stibmivb.opendatasoft.com/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
-CACHE_TTL_S = 60  # be kinder to quota
+# Cloudflare Worker URL (NOT the STIB/OpenDataSoft URL)
+BASE_PROXY = "https://stib-proxy.stib-proxy.madcap1090.workers.dev"
+CACHE_TTL_S = 60
+
 
 def parse_dt(s: str) -> datetime:
     s = s.replace("Z", "+00:00")
@@ -27,14 +27,10 @@ def parse_dt(s: str) -> datetime:
         dt = dt.replace(tzinfo=ZoneInfo("UTC"))
     return dt
 
+
 def build_where_pointid_in(ids: list[str]) -> str:
     return f"pointid in ({', '.join(repr(s) for s in ids)})"
 
-def safe_json(resp):
-    try:
-        return resp.json()
-    except Exception:
-        return {}
 
 @st.cache_resource
 def get_session() -> requests.Session:
@@ -42,32 +38,18 @@ def get_session() -> requests.Session:
     s.headers.update({"User-Agent": "stib-streamlit/1.0"})
     return s
 
+
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
-def fetch_ods_cached(where: str) -> list[dict]:
+def fetch_via_proxy(where: str) -> list[dict]:
+    # The worker expects where/limit and returns the upstream JSON unchanged
     params = {"limit": 100, "where": where}
-    headers = {
-        "User-Agent": "stib-streamlit/1.0",
-        "Accept": "application/json",
-        "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
-    }
 
-    api_key = st.secrets.get("STIB_API_KEY")
-    if api_key:
-        headers["Authorization"] = f"Apikey {api_key}"
+    s = get_session()
+    r = s.get(BASE_PROXY, params=params, timeout=30)
 
-    # httpx: different TLS/HTTP implementation than requests+urllib3
-    with httpx.Client(
-        timeout=30.0,
-        verify=certifi.where(),
-        http2=False,   # important: avoid some CDN HTTP/2+TLS quirks
-        follow_redirects=True,
-    ) as client:
-        r = client.get(BASE_ODS, params=params, headers=headers)
-
-    if r.status_code == 429:
-        raise RuntimeError(f"429 {r.text}")
-
+    # if the worker returns a non-200, show it
     r.raise_for_status()
+
     payload = r.json() if r.text.strip() else {}
     return payload.get("results", [])
 
@@ -100,21 +82,19 @@ def build_board(records):
         out.append((title, deps))
     return out
 
-# UI
-st.set_page_config(page_title="STIB LCD", layout="centered")
 
-api_key = st.secrets.get("STIB_API_KEY")
-st.sidebar.write("STIB_API_KEY loaded:", bool(api_key))
+# ---------------- UI ----------------
+st.set_page_config(page_title="STIB LCD", layout="centered")
 
 force_refresh = st.button("↻", help="Refresh")
 
 where = build_where_pointid_in(stop_ids)
 
 if force_refresh:
-    fetch_ods_cached.clear()
+    fetch_via_proxy.clear()
 
 try:
-    records = fetch_ods_cached(where)
+    records = fetch_via_proxy(where)
     st.session_state["last_good_records"] = records
 except Exception as e:
     st.warning(str(e))
@@ -122,13 +102,15 @@ except Exception as e:
 
 st.sidebar.write("records:", len(records))
 
+CLOSE_MIN = 1
 for title, deps in build_board(records):
     st.markdown(f"### {title}")
     if not deps:
         st.caption("(geen realtime data)")
         continue
+
     lines = []
     for mins, line, dest in deps:
-        mins_disp = "↓↓" if mins <= 1 else f"{mins:>2}"
+        mins_disp = "↓↓" if mins <= CLOSE_MIN else f"{mins:>2}"
         lines.append(f"{line:>2} {dest[:18]:<18} {mins_disp:>2}")
     st.code("\n".join(lines), language="text")
