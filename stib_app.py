@@ -88,6 +88,23 @@ st.set_page_config(page_title="STIB LCD", layout="centered")
 
 import ssl
 import sys
+import requests
+import streamlit as st
+
+TEST_URLS = [
+    "https://example.com",
+    "https://www.google.com",
+    "https://api.github.com",
+    "https://cloudflare.com",
+]
+
+st.sidebar.write("Connectivity tests:")
+for u in TEST_URLS:
+    try:
+        r = requests.get(u, timeout=10)
+        st.sidebar.write(u, "->", r.status_code)
+    except Exception as e:
+        st.sidebar.write(u, "->", repr(e))
 st.sidebar.write("Python:", sys.version)
 st.sidebar.write("OpenSSL:", ssl.OPENSSL_VERSION)
 
