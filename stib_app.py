@@ -34,7 +34,11 @@ def parse_dt(s: str) -> datetime:
 def build_where_pointid_in(ids: list[str]) -> str:
     return f"pointid in ({', '.join(repr(s) for s in ids)})"
 
-
+def safe_json(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return {}
 class TLSAdapter(HTTPAdapter):
     """Requests adapter with a custom SSLContext (handy on some hosted OpenSSL setups)."""
 
@@ -95,6 +99,7 @@ def fetch_ods_cached(where: str) -> list[dict]:
     if api_key:
         # ODS Explore API v2 authentication
         headers["Authorization"] = f"Apikey {api_key}"
+        params["apikey"] = api_key
 
     s = get_session()
 
@@ -103,11 +108,14 @@ def fetch_ods_cached(where: str) -> list[dict]:
             r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
 
             if r.status_code == 429:
-                # Respect Retry-After if present; otherwise exponential backoff
-                ra = r.headers.get("Retry-After")
-                sleep_s = int(ra) if (ra and ra.isdigit()) else (2**attempt)
-                time.sleep(sleep_s)
-                continue
+                st.warning(
+                    "Rate limited (429).\n"
+                    f"reset_time: {safe_json(r).get('reset_time')}\n"
+                    f"Retry-After: {r.headers.get('Retry-After')}\n"
+                    f"X-RateLimit-Remaining: {r.headers.get('X-RateLimit-Remaining')}\n"
+                    f"X-RateLimit-Limit: {r.headers.get('X-RateLimit-Limit')}"
+                )
+                return []
 
             r.raise_for_status()
             payload = r.json() if r.text.strip() else {}
@@ -151,6 +159,9 @@ def build_board(records):
 # ---------------- UI ----------------
 
 st.set_page_config(page_title="STIB LCD", layout="centered")
+
+api_key = st.secrets.get("STIB_API_KEY")
+st.sidebar.write("STIB_API_KEY loaded:", bool(api_key))
 
 st.markdown(
     """
