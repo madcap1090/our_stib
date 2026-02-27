@@ -20,6 +20,8 @@ stations = {
 stop_ids = list(stations["fr"].keys())
 
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
+BASE_AZ = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes/"
+
 ODS_MIN_INTERVAL_S = 30  # <= 1 call per 30s per session
 
 
@@ -85,49 +87,37 @@ def fetch_ods_throttled(force: bool):
     if (not force) and (now - last_t) < ODS_MIN_INTERVAL_S:
         return st.session_state.get("ods_last_records", [])
 
-    where = build_where_pointid_in(stop_ids)
-    params = {"limit": 100, "where": where}
-
     headers = {
         "User-Agent": "stib-streamlit/1.0",
         "Accept": "application/json",
-        "Accept-Language": "nl,en;q=0.8,fr;q=0.6",
         "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
+        "bmc-partner-key": st.secrets["BMC_PARTNER_KEY"].strip(),
     }
 
-    s = get_session()
+    where = build_where_pointid_in(stop_ids)
+    url = BASE_AZ + "?" + urllib.parse.urlencode({"limit": 100, "where": where})
 
     for attempt in range(3):
         try:
-            r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
-            if r.status_code == 429:
-                # ODS usually returns JSON with reset_time, but don't assume
-                reset = None
-                try:
-                    reset = r.json().get("reset_time")
-                except Exception:
-                    pass
-                st.warning(f"Rate limited (429). Reset: {reset or 'unknown'}")
-                return st.session_state.get("ods_last_records", [])
-
-            r.raise_for_status()
-
-            payload = r.json() if r.text.strip() else {}
+            text = _read(url, headers=headers)
+            payload = json.loads(text) if text.strip() else {}
             records = payload.get("results", [])
 
             st.session_state["ods_last_fetch_ts"] = now
             st.session_state["ods_last_records"] = records
             return records
 
-        except requests.exceptions.SSLError as e:
-            st.warning(f"TLS error: {e}")
+        except urllib.error.HTTPError as e:
+            body = e.read(2000).decode("utf-8", "ignore")
+            st.warning(f"API error {e.code}: {body[:200]}")
             time.sleep(1.5 * (attempt + 1))
-        except requests.exceptions.RequestException as e:
+
+        except urllib.error.URLError as e:
             st.warning(f"Network error: {e}")
             time.sleep(1.5 * (attempt + 1))
+
         except json.JSONDecodeError:
-            st.warning("ODS did not return valid JSON.")
+            st.warning("API did not return valid JSON.")
             time.sleep(1.5 * (attempt + 1))
 
     return st.session_state.get("ods_last_records", [])
