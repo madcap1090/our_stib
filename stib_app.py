@@ -110,13 +110,10 @@ def fetch_ods_throttled(force: bool):
     {"limit": 100, "where": where},
     quote_via=quote,  # encodes spaces as %20, not +
     )
+    url = BASE_AZ + "?" + urlencode({"limit": 500}, quote_via=quote)
     # debug: print the final URL being requested (without the key, which is in headers)
     st.sidebar.write("url:", url)
-    # TEMP: no where
-    url = BASE_AZ + "?" + urlencode({"limit": 500}, quote_via=quote)
-    text = _read(url, headers=headers)
-    payload = json.loads(text)
-    records = payload.get("results", [])
+
 
     wanted = set(stop_ids)
     present = sorted({str(r.get("pointid")) for r in records} & wanted)
