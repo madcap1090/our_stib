@@ -115,10 +115,6 @@ def fetch_ods_throttled(force: bool):
     st.sidebar.write("url:", url)
 
 
-    wanted = set(stop_ids)
-    present = sorted({str(r.get("pointid")) for r in records} & wanted)
-    st.sidebar.write("wanted present in first 500:", present)
-
     for attempt in range(3):
         try:
             text = _read(url, headers=headers)
