@@ -104,6 +104,8 @@ def fetch_ods_throttled(force: bool):
 
     where = build_where_pointid_in(stop_ids)
     url = BASE_AZ + "?" + urllib.parse.urlencode({"limit": 100, "where": where})
+    # debug: print the final URL being requested (without the key, which is in headers)
+    st.sidebar.write("url:", url)
 
     for attempt in range(3):
         try:
@@ -197,7 +199,7 @@ records = fetch_ods_throttled(force=force_refresh)
 st.sidebar.write("records:", len(records))
 if records:
     st.sidebar.write("sample pointid type/value:", type(records[0].get("pointid")).__name__, records[0].get("pointid"))
-st.sidebar.write("url:", url)
+
 
 CLOSE_MIN = 1
 board = build_board(records)
