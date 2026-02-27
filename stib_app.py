@@ -45,8 +45,7 @@ def parse_dt(s: str) -> datetime:
 
 
 def build_where_pointid_in(ids: list[str]) -> str:
-    return f"pointid in ({', '.join(repr(s) for s in ids)})"
-
+    return f"pointid in ({', '.join(str(int(s)) for s in ids)})"
 
 class TLSAdapter(HTTPAdapter):
     """
@@ -194,6 +193,10 @@ with col2:
     st.caption(f"Last rerun: {datetime.now(BRUSSELS).isoformat(timespec='seconds')}")
 
 records = fetch_ods_throttled(force=force_refresh)
+
+st.sidebar.write("records:", len(records))
+if records:
+    st.sidebar.write("sample pointid type/value:", type(records[0].get("pointid")).__name__, records[0].get("pointid"))
 
 CLOSE_MIN = 1
 board = build_board(records)
