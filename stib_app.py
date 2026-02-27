@@ -197,6 +197,7 @@ records = fetch_ods_throttled(force=force_refresh)
 st.sidebar.write("records:", len(records))
 if records:
     st.sidebar.write("sample pointid type/value:", type(records[0].get("pointid")).__name__, records[0].get("pointid"))
+st.sidebar.write("url:", url)
 
 CLOSE_MIN = 1
 board = build_board(records)
