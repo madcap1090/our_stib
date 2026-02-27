@@ -106,6 +106,9 @@ for u in TEST_URLS:
 st.sidebar.write("Python:", sys.version)
 st.sidebar.write("OpenSSL:", ssl.OPENSSL_VERSION)
 
+st.sidebar.write("certifi:", md.version("certifi"))
+st.sidebar.write("certifi.where:", certifi.where())
+
 force_refresh = st.button("↻", help="Refresh")
 
 where = build_where_pointid_in(stop_ids)
