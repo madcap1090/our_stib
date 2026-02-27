@@ -1,13 +1,14 @@
 import json
-import time
-from datetime import datetime
-
-import streamlit as st
-import requests
 import ssl
-from urllib3.poolmanager import PoolManager
-from requests.adapters import HTTPAdapter
+import time
+import urllib.parse
+from datetime import datetime
 from zoneinfo import ZoneInfo
+
+import requests
+import streamlit as st
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
 BRUSSELS = ZoneInfo("Europe/Brussels")
 
