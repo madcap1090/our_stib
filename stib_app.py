@@ -137,7 +137,7 @@ def build_board(records):
     by_stop = {sid: [] for sid in stop_ids}
 
     for rec in records:
-        sid = rec.get("pointid")
+        sid = str(rec.get("pointid"))
         if sid not in by_stop:
             continue
 
