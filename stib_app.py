@@ -1,11 +1,12 @@
 import json
 import ssl
 import time
+import urllib
 import urllib.error
 import urllib.parse
 import urllib.request
-import urllib
 from datetime import datetime
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import requests
@@ -45,7 +46,8 @@ def parse_dt(s: str) -> datetime:
 
 
 def build_where_pointid_in(ids: list[str]) -> str:
-    return f"pointid in ({', '.join(str(int(s)) for s in ids)})"
+    # no spaces anywhere
+    return "pointid in (" + ",".join(str(int(x)) for x in ids) + ")"
 
 class TLSAdapter(HTTPAdapter):
     """
@@ -103,7 +105,10 @@ def fetch_ods_throttled(force: bool):
     }
 
     where = build_where_pointid_in(stop_ids)
-    url = BASE_AZ + "?" + urllib.parse.urlencode({"limit": 100, "where": where})
+    url = BASE_AZ + "?" + urlencode(
+    {"limit": 100, "where": where},
+    quote_via=quote,  # encodes spaces as %20, not +
+    )
     # debug: print the final URL being requested (without the key, which is in headers)
     st.sidebar.write("url:", url)
 
@@ -195,11 +200,14 @@ with col2:
     st.caption(f"Last rerun: {datetime.now(BRUSSELS).isoformat(timespec='seconds')}")
 
 records = fetch_ods_throttled(force=force_refresh)
+records = [r for r in records if str(r.get("pointid")) in set(stop_ids)]
 
 st.sidebar.write("records:", len(records))
 if records:
     st.sidebar.write("sample pointid type/value:", type(records[0].get("pointid")).__name__, records[0].get("pointid"))
 
+wanted = set(stop_ids)
+st.sidebar.write("unique pointids (first 10):", sorted({str(r.get("pointid")) for r in records})[:10])
 
 CLOSE_MIN = 1
 board = build_board(records)
