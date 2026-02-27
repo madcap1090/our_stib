@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import certifi
 import requests
 import streamlit as st
 
@@ -35,22 +36,18 @@ def build_where_pointid_in(ids: list[str]) -> str:
 @st.cache_resource
 def get_session() -> requests.Session:
     s = requests.Session()
+    s.verify = certifi.where()  # <-- force known-good CA bundle
     s.headers.update({"User-Agent": "stib-streamlit/1.0"})
     return s
-
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
 def fetch_via_proxy(where: str) -> list[dict]:
     # The worker expects where/limit and returns the upstream JSON unchanged
-    params = {"limit": 100, "where": where}
 
     s = get_session()
-    r = s.get(BASE_PROXY, params=params, timeout=30)
-
-    # if the worker returns a non-200, show it
+    r = s.get(BASE_PROXY, params={"limit": 100, "where": where}, timeout=30)
     r.raise_for_status()
-
-    payload = r.json() if r.text.strip() else {}
+    payload = r.json()
     return payload.get("results", [])
 
 
@@ -88,6 +85,7 @@ st.set_page_config(page_title="STIB LCD", layout="centered")
 
 import ssl
 import sys
+
 import requests
 import streamlit as st
 
