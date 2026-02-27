@@ -5,8 +5,6 @@ from datetime import datetime
 import streamlit as st
 import requests
 import ssl
-from urllib3.poolmanager import PoolManager
-from requests.adapters import HTTPAdapter
 from zoneinfo import ZoneInfo
 
 BRUSSELS = ZoneInfo("Europe/Brussels")
@@ -53,31 +51,11 @@ class TLSAdapter(HTTPAdapter):
         )
 
 
-def make_session() -> requests.Session:
-    ctx = ssl.create_default_context()
-
-    # Relax cipher policy a bit (helps on some OpenSSL 3 environments)
-    try:
-        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
-    except Exception:
-        pass
-
-    # Pin to TLS 1.2 (avoid TLS 1.3 negotiation weirdness)
-    if hasattr(ssl, "TLSVersion"):
-        try:
-            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-        except Exception:
-            pass
-
-    s = requests.Session()
-    s.mount("https://", TLSAdapter(ctx))
-    return s
-
-
 @st.cache_resource
 def get_session() -> requests.Session:
-    return make_session()
+    s = requests.Session()
+    s.headers.update({"User-Agent": "stib-streamlit/1.0"})
+    return s
 
 
 @st.cache_data(ttl=CACHE_TTL_S, show_spinner=False)
@@ -94,10 +72,18 @@ def fetch_ods_cached(where: str) -> list[dict]:
     api_key = st.secrets.get("STIB_API_KEY")
     if api_key:
         headers["Authorization"] = f"Apikey {api_key}"
-        params["apikey"] = api_key
 
     s = get_session()
     r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
+
+    for attempt in range(3):
+        try:
+            r = s.get(BASE_ODS, params=params, headers=headers, timeout=30)
+            break
+        except requests.exceptions.SSLError:
+            time.sleep(1.5 * (attempt + 1))
+    else:
+        raise
 
     if r.status_code == 429:
         data = safe_json(r)
