@@ -48,7 +48,7 @@ def parse_dt(s: str) -> datetime:
 
 
 def build_where_pointid(ids: list[str]) -> str:
-    return " OR ".join(f"pointid={int(x)}" for x in ids)
+    return " OR ".join(f'pointid="{x}"' for x in ids)
 
 class TLSAdapter(HTTPAdapter):
     """
@@ -106,7 +106,7 @@ def fetch_ods_throttled(force: bool):
     }
 
     where = build_where_pointid(stop_ids)
-    where = "pointid='6803' OR pointid='1674' OR pointid='2506' OR pointid='1014'"
+    # where = "pointid='6803' OR pointid='1674' OR pointid='2506' OR pointid='1014'"
     url = BASE_AZ + "?" + urlencode(
     {"limit": 100, "where": where},
     quote_via=quote,  # encodes spaces as %20, not +
@@ -203,6 +203,7 @@ records = fetch_ods_throttled(force=force_refresh)
 records = [r for r in records if str(r.get("pointid")) in set(stop_ids)]
 
 st.sidebar.write("records:", len(records))
+
 if records:
     st.sidebar.write("sample pointid type/value:", type(records[0].get("pointid")).__name__, records[0].get("pointid"))
 
