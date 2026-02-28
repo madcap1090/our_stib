@@ -22,8 +22,9 @@ stations = {
     "fr": {"6803": "LENOIR", "1674": "BRUXELLOIS", "2506": "MIRRIOR", "1014": "MIRRIOR"},
     "nl": {"6803": "LENOIR", "1674": "BRUSSELAARS", "2506": "SPIEGEL", "1014": "SPIEGEL"},
 }
+
 stop_ids = list(stations["fr"].keys())
-#stop_ids = ['1014']
+stop_ids = ['1014']
 
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
 BASE_AZ = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes/"
@@ -106,7 +107,6 @@ def fetch_ods_throttled(force: bool):
     }
 
     where = build_where_pointid(stop_ids)
-    where = 'pointid IN ("6803")'
     
     url = BASE_AZ + "?" + urlencode(
     {"limit": 100, "where": where},
