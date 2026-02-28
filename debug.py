@@ -97,3 +97,100 @@ except urllib.error.HTTPError as e:
     print("HTTPError:", e.code)
     print("Content-Type:", e.headers.get("Content-Type"))
     print("Body head:", body[:300])
+    
+    
+####
+
+from urllib.parse import urlencode, quote
+import requests
+
+BASE = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes"  # <-- no trailing slash
+
+where = 'pointid="6803" or pointid="1674" or pointid="2506" or pointid="1014"'
+where = 'pointid LIKE "%6803%"'
+
+
+where = 'pointid="6803" OR pointid="1674" OR pointid="2506" OR pointid="1014"'
+where = 'pointid LIKE "%6803%" OR pointid LIKE "%1674%" OR pointid LIKE "%2506%" OR pointid LIKE "%1014%"'
+where = 'pointid IN ("6803","1674","2506","1014")'
+where = "pointid=6803 OR pointid=1674 OR pointid=2506 OR pointid=1014"
+where = 'pointid:"6803" OR pointid:"1674"'
+where = 'pointid = "6803" OR pointid = "1674"'
+where = "pointid = 6803 OR pointid = 1674" 
+
+params = {"limit": 100, "where": where}
+params = {"$filter": "pointid eq 6803 or pointid eq 1674", "limit": 100}
+params = {"$where": "pointid IN('6803','1674')", "$limit": 100}
+
+
+where = "pointid='6803' OR pointid='1674' OR pointid='2506' OR pointid='1014'"
+params = {"limit": 100, "where": where}
+
+# OPTION A: subscription key header (most common in Azure APIM)
+headers = {"Ocp-Apim-Subscription-Key": "d3"}  # sometimes it's "subscription-key" instead
+
+r = requests.get(BASE, params=params, headers=headers, timeout=20)
+print("URL:", r.url)
+print("STATUS:", r.status_code)
+print("BODY:", r.text[:500])
+
+BASE = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes"
+r = requests.get(BASE, params={"limit": 1}, timeout=20)
+print(r.status_code)
+print(r.json())
+
+params = {"limit": 100, "refine": "pointid:6803"}
+
+r = requests.get(BASE, params=params, headers=headers, timeout=20)
+data = r.json()
+
+# Step 2: print a full record
+import json
+print(json.dumps(data, indent=2))
+
+
+import requests
+import json
+
+BASE = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes"
+headers = {"Ocp-Apim-Subscription-Key": "d3"}
+
+# Try each candidate and print filtered_count to see which one "sticks"
+candidates = [
+    {"where": "pointid='6803'"},
+    {"where": 'pointid="6803"'},
+    {"where": "pointid=6803"},
+    {"filter": "pointid='6803'"},
+    {"filter": "pointid=6803"},
+    {"$filter": "pointid eq '6803'"},
+    {"$filter": "pointid eq 6803"},
+    {"pointid": "6803"},           # maybe field name is a direct param
+    {"q": "6803"},
+    {"search": "6803"},
+]
+
+for params in candidates:
+    params["limit"] = 5
+    r = requests.get(BASE, params=params, headers=headers, timeout=20)
+    data = r.json()
+    filtered = data.get("metadata", {}).get("filtered_count", "?")
+    print(f"{list(params.items())[0]} → filtered_count={filtered}  status={r.status_code}")
+    
+    
+from urllib.parse import urlencode
+import requests
+
+BASE = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes"
+headers = {"Ocp-Apim-Subscription-Key": "d3"}
+
+where = "pointid='6803' OR pointid='1674' OR pointid='2506' OR pointid='1014'"
+
+# Build query string manually so you can inspect the exact URL
+qs = urlencode({"limit": 100, "where": where})
+url = f"{BASE}?{qs}"
+print("URL:", url)
+
+r = requests.get(url, headers=headers, timeout=20)
+data = r.json()
+print("filtered_count:", data["metadata"]["filtered_count"])
+print("results:", [x["pointid"] for x in data["results"]])

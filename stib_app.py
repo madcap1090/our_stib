@@ -107,6 +107,7 @@ def fetch_ods_throttled(force: bool):
 
     where = build_where_pointid(stop_ids)
     where = '(pointid="6803" OR pointid="1674" OR pointid="2506" OR pointid="1014")'
+    where = 'pointid="6803" or pointid="1674" or pointid="2506" or pointid="1014"'
     
     
     url = BASE_AZ + "?" + urlencode(
