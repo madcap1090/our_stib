@@ -106,7 +106,8 @@ def fetch_ods_throttled(force: bool):
     }
 
     where = build_where_pointid(stop_ids)
-    # where = "pointid='6803' OR pointid='1674' OR pointid='2506' OR pointid='1014'"
+    where = 'pointid IN ("6803","1674","2506","1014")'
+    
     url = BASE_AZ + "?" + urlencode(
     {"limit": 100, "where": where},
     quote_via=quote,  # encodes spaces as %20, not +

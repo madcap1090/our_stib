@@ -14,11 +14,6 @@ stations = {
     "nl": {"6803": "LENOIR", "1674": "BRUSSELAARS", "2506": "SPIEGEL", "1014": "SPIEGEL"},
 }
 
-stations = {
-    "nl": {"6803": "LENOIR"},
-}
-
-
 
 stop_ids = list(stations["fr"].keys())
 
