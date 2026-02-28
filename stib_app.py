@@ -106,7 +106,8 @@ def fetch_ods_throttled(force: bool):
     }
 
     where = build_where_pointid(stop_ids)
-    where = 'pointid IN ("6803","1674","2506","1014")'
+    where = "pointid IN (\"6803\",\"1674\",\"2506\",\"1014\")"
+    
     
     url = BASE_AZ + "?" + urlencode(
     {"limit": 100, "where": where},
