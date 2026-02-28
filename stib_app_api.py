@@ -13,6 +13,13 @@ stations = {
     "fr": {"6803": "LENOIR", "1674": "BRUXELLOIS", "2506": "MIRRIOR", "1014": "MIRRIOR"},
     "nl": {"6803": "LENOIR", "1674": "BRUSSELAARS", "2506": "SPIEGEL", "1014": "SPIEGEL"},
 }
+
+stations = {
+    "nl": {"6803": "LENOIR"},
+}
+
+
+
 stop_ids = list(stations["fr"].keys())
 
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
@@ -55,7 +62,6 @@ def fetch_ods_throttled(force: bool):
     }
 
     ods_where = build_where_pointid_in(stop_ids)
-    ods_where = 'pointid IN ("6803")'
     url = BASE_ODS + "?" + urllib.parse.urlencode({"limit": 100, "where": ods_where})
 
     for attempt in range(3):
