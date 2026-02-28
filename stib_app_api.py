@@ -55,6 +55,7 @@ def fetch_ods_throttled(force: bool):
     }
 
     ods_where = build_where_pointid_in(stop_ids)
+    ods_where = 'pointid IN ("6803","1674","2506","1014")'
     url = BASE_ODS + "?" + urllib.parse.urlencode({"limit": 100, "where": ods_where})
 
     for attempt in range(3):
