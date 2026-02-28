@@ -114,6 +114,8 @@ def fetch_ods_throttled(force: bool):
     quote_via=quote,  # encodes spaces as %20, not +
     )
 
+    st.sidebar.write("url:", url)
+
     for attempt in range(3):
         try:
             text = _read(url, headers=headers)
