@@ -24,7 +24,6 @@ stations = {
 }
 
 stop_ids = list(stations["fr"].keys())
-stop_ids = ['6083','1014']
 
 BASE_ODS = "https://data.stib-mivb.brussels/api/explore/v2.1/catalog/datasets/waiting-time-rt-production/records"
 BASE_AZ = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes/"
