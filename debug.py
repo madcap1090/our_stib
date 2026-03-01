@@ -194,3 +194,139 @@ r = requests.get(url, headers=headers, timeout=20)
 data = r.json()
 print("filtered_count:", data["metadata"]["filtered_count"])
 print("results:", [x["pointid"] for x in data["results"]])
+
+key = "d913"
+
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import json
+import time
+import requests
+
+BASE = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes"
+
+API_KEY = os.getenv("STIB_API_KEY", key)  # set env var ideally
+
+# send both headers to avoid gateway differences
+HEADERS = {
+    "bmc-partner-key": API_KEY,
+    "Ocp-Apim-Subscription-Key": API_KEY,
+}
+
+LIMIT = 10000
+SLEEP = 0.0  # set to 0.2 if you hit rate limits
+
+
+def fetch_all_trams() -> list[dict]:
+    out: list[dict] = []
+    offset = 0
+    where = 'category="tram"'
+
+    while True:
+        params = {"limit": LIMIT, "offset": offset, "where": where}
+        r = requests.get(BASE, headers=HEADERS, params=params, timeout=30)
+        r.raise_for_status()
+        payload = r.json()
+
+        results = payload.get("results", [])
+        if not results:
+            break
+
+        out.extend(results)
+
+        if len(results) < LIMIT:
+            break
+
+        offset += LIMIT
+        if SLEEP:
+            time.sleep(SLEEP)
+
+    return out
+
+
+def main():
+    trams = fetch_all_trams()
+    print("tram records:", len(trams))
+
+    with open("waiting_times_trams.jsonl", "w", encoding="utf-8") as f:
+        for rec in trams:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    print("wrote: waiting_times_trams.jsonl")
+
+
+if __name__ == "__main__":
+    main()
+    
+
+from __future__ import annotations
+
+import os
+import requests
+import json
+
+BASE = "https://api-management-opendata-production.azure-api.net/api/datasets/stibmivb/rt/WaitingTimes/"
+
+API_KEY = os.getenv("STIB_API_KEY", key)
+
+HEADERS = {
+    "bmc-partner-key": API_KEY,
+    "Ocp-Apim-Subscription-Key": API_KEY,
+}
+
+params = {
+    "category": "tram",
+    "limit": 1000
+}
+
+r = requests.get(BASE, headers=HEADERS, params=params, timeout=30)
+r.raise_for_status()
+
+data = r.json()
+
+print("URL:", r.url)
+print("count:", len(data.get("results", [])))
+
+with open("waiting_times_trams.jsonl", "w", encoding="utf-8") as f:
+    for rec in data.get("results", []):
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+print("Saved waiting_times_trams.jsonl")
+
+
+params = {
+    "where": 'category="tram"',
+    "limit": 10000
+}
+
+pointids = sorted({
+    str(r["pointid"])
+    for r in data.get("results", [])
+    if "pointid" in r and r["pointid"] is not None
+})
+
+print("count:", len(pointids))
+print(pointids)
+
+stations = {
+    "fr": {"6803": "LENOIR", "1674": "BRUXELLOIS", "2506": "MIRRIOR", "1014": "MIRRIOR"},
+    "nl": {"6803": "LENOIR", "1674": "BRUSSELAARS", "2506": "SPIEGEL", "1014": "SPIEGEL"},
+}
+
+# pointids = [...]  # your previously extracted list
+
+pointids_set = set(pointids)
+
+check = {
+    pid: pid in pointids_set
+    for pid in stations["fr"].keys()
+}
+
+print("Presence check:")
+for pid, exists in check.items():
+    print(f"{pid} -> {exists}")
+
+missing = [pid for pid, ok in check.items() if not ok]
+print("Missing:", missing)

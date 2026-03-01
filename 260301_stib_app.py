@@ -91,7 +91,13 @@ def get_session() -> requests.Session:
     return make_session()
 
 
-def fetch_station_records(session: requests.Session, sid: str) -> list[dict]:
+def fetch_ods_throttled(force: bool):
+    now = time.time()
+    last_t = st.session_state.get("ods_last_fetch_ts", 0.0)
+
+    if (not force) and (now - last_t) < ODS_MIN_INTERVAL_S:
+        return st.session_state.get("ods_last_records", [])
+
     headers = {
         "User-Agent": "stib-streamlit/1.0",
         "Accept": "application/json",
@@ -99,83 +105,43 @@ def fetch_station_records(session: requests.Session, sid: str) -> list[dict]:
         "bmc-partner-key": st.secrets["BMC_PARTNER_KEY"].strip(),
     }
 
-    # one station per call
-    where = f'pointid="{sid}"'
-
+    where = build_where_pointid(stop_ids)
+    where = '(pointid="6803" OR pointid="1674" OR pointid="2506" OR pointid="1014")'
+    where = 'pointid="6803" or pointid="1674" or pointid="2506" or pointid="1014"'
+    
+    
     url = BASE_AZ + "?" + urlencode(
-        {"limit": 100, "where": where},
-        quote_via=quote,  # spaces as %20 (not +)
+    {"limit": 100, "where": where},
+    quote_via=quote,  # encodes spaces as %20, not +
     )
 
-    # handy debug
-    st.sidebar.write(f"url[{sid}]:", url)
+    st.sidebar.write("url:", url)
 
     for attempt in range(3):
         try:
             text = _read(url, headers=headers)
             payload = json.loads(text) if text.strip() else {}
-            return payload.get("results", [])
+            records = payload.get("results", [])
+
+            st.session_state["ods_last_fetch_ts"] = now
+            st.session_state["ods_last_records"] = records
+            return records
 
         except urllib.error.HTTPError as e:
             body = e.read(2000).decode("utf-8", "ignore")
-            st.warning(f"[{sid}] API error {e.code}: {body[:200]}")
+            st.warning(f"API error {e.code}: {body[:200]}")
             time.sleep(1.5 * (attempt + 1))
 
         except urllib.error.URLError as e:
-            st.warning(f"[{sid}] Network error: {e}")
+            st.warning(f"Network error: {e}")
             time.sleep(1.5 * (attempt + 1))
 
         except json.JSONDecodeError:
-            st.warning(f"[{sid}] API did not return valid JSON.")
+            st.warning("API did not return valid JSON.")
             time.sleep(1.5 * (attempt + 1))
 
-    return []
+    return st.session_state.get("ods_last_records", [])
 
-
-def fetch_ods_throttled(force: bool):
-    """
-    1 call per station, cached per station.
-    """
-    now = time.time()
-
-    # per-station caches
-    last_ts: dict[str, float] = st.session_state.get("az_last_fetch_ts_by_sid", {})
-    last_records: dict[str, list[dict]] = st.session_state.get("az_last_records_by_sid", {})
-
-    # if not forcing and ALL stations are still "fresh", return cached combined
-    if not force:
-        all_fresh = True
-        for sid in stop_ids:
-            if (now - last_ts.get(sid, 0.0)) >= ODS_MIN_INTERVAL_S:
-                all_fresh = False
-                break
-        if all_fresh:
-            combined = []
-            for sid in stop_ids:
-                combined.extend(last_records.get(sid, []))
-            return combined
-
-    # fetch stale ones (or all if force)
-    sess = get_session()  # your TLS session
-    combined: list[dict] = []
-
-    for sid in stop_ids:
-        fresh = (now - last_ts.get(sid, 0.0)) < ODS_MIN_INTERVAL_S
-        if (not force) and fresh:
-            recs = last_records.get(sid, [])
-        else:
-            recs = fetch_station_records(sess, sid)
-            last_ts[sid] = now
-            last_records[sid] = recs
-
-            # tiny delay to be nice to the API (optional)
-            time.sleep(0.1)
-
-        combined.extend(recs)
-
-    st.session_state["az_last_fetch_ts_by_sid"] = last_ts
-    st.session_state["az_last_records_by_sid"] = last_records
-    return combined
 
 def build_board(records):
     now = datetime.now(BRUSSELS)
