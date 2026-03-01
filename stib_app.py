@@ -107,6 +107,9 @@ def fetch_station_records(session: requests.Session, sid: str) -> list[dict]:
         quote_via=quote,  # spaces as %20 (not +)
     )
 
+    # handy debug
+    # st.sidebar.write(f"url[{sid}]:", url)
+
     for attempt in range(3):
         try:
             text = _read(url, headers=headers)
@@ -234,6 +237,9 @@ with col1:
 
 with col2:
     st.caption(f"Last rerun: {datetime.now(BRUSSELS).isoformat(timespec='seconds')}")
+
+records = fetch_ods_throttled(force=force_refresh)
+records = [r for r in records if str(r.get("pointid")) in set(stop_ids)]
 
 CLOSE_MIN = 1
 board = build_board(records)
